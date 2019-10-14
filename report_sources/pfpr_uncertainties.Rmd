@@ -1,0 +1,66 @@
+---
+title: "spatial_uncertainty"
+author: "Daniel T. Citron"
+date: "10/10/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I want to see whether there are correlations between the uncertainty and the pfpr draws and things like sample size or underlying population size
+
+```{r}
+library(here)
+library(data.table)
+```
+
+```{r Load data}
+# population data
+pop.data <- fread(here("data/clean/aggregated_2015_2018_travel_data.csv"))
+# pfpr data
+pfpr.data <- fread(here("data/clean/pfpr_draws.csv"))
+pfpr.data <- merge(pfpr.data, pop.data[year == 2018, .(areaId, ad2, n, pop)], by = "areaId", all = FALSE)
+```
+
+```{r Examine data - plot Population vs. standard deviation in pfpr estimates}
+ggplot(data = pfpr.data) + 
+  geom_point(mapping = aes(x = draw.sd, y = log10(pop), color = ad2))
+```
+
+```{r Examine data - plot Population vs. sd/mean pfpr estimates}
+ggplot(data = pfpr.data) + 
+  geom_point(mapping = aes(x = draw.sd/draw.mean, y = log10(pop), color = ad2))
+```
+
+```{r Examine data - plot sample size vs. sd}
+ggplot(data = pfpr.data) + 
+  geom_point(mapping = aes(x = draw.sd/draw.mean, y = log10(n), color = ad2))
+```
+
+```{r Which is this place in Baney with such a high variance wrt the mean?}
+pfpr.data[draw.sd/draw.mean > 1][, .(areaId, pop, n, draw.mean, draw.sd)]
+```
+
+```{r Examine data - plot sample fraction of population vs. sd/mean}
+# This does not really seem to be meaningful
+ggplot(data = pfpr.data) + 
+  geom_point(mapping = aes(x = draw.sd/draw.mean, y = n/pop, color = ad2))
+```
+
+
+How do the 6 map-areas that I've chosen line up here?
+```{r}
+pfpr.data$dummy <- 0 #pfpr.data$ad2
+pfpr.data[areaId %in% c(220,335,502,1175,2199,2457)]$dummy <- 1# "pilot"
+ggplot(data = pfpr.data) + 
+  geom_point(mapping = aes(x = draw.sd, y = log10(pop), color = dummy))
+
+```
+
+```{r}
+pfpr.data[areaId %in% c(220,335,502,1175,2199,2457)][, .(areaId, pop, n, draw.mean, draw.sd)]
+#View(pfpr.data[, .(areaId, pop, n, draw.mean, draw.sd)])
+```
+

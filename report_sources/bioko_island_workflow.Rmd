@@ -1,0 +1,585 @@
+---
+title: "bioko_island_workflow.Rmd"
+author: "Daniel T. Citron"
+date: "10/2/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Workflow for Bioko Island Spatial Uncertainty simulations
+
+We will parameterize our simulation of Bioko Island using the data and parameters derived from the 2015-2018 data.  We will imagine the island as it was in 2018, with the 2018 census and PR estimates.  We will use the 2015-2017 data to characterize some other aspects of the model, such as travel behavior and care-seeking and treatment behavior.
+
+We will need to calibrate the force of infection and mosquito emergence rates based on the combination of the travel model and whatever draw we take from our ensemble of posterior distribution draws. We will write a function that produces the FOI and emergence rates. We will need to check whether the local FOI and the mosquito emergence rates are positive. 
+
+```{r Load Libraries}
+library(data.table)
+library(Matrix)
+library(MASS)
+
+library(here)
+
+library(macro.pfsi, lib.loc = here("macro.pfsi"))
+```
+
+Load in the data:
+```{r Load data}
+# population data
+pop.data <- fread(here("data/clean/aggregated_2015_2018_travel_data.csv"))
+# travel frequency
+trip.freq.data <- fread(here("data/clean/trip_frequency_model_estimates.csv"))
+# trip.freq.data[year == 2018, .(areaId, year, draw.mean)]
+
+# travel destination selection model
+trip.dest.data <- fread(here("data/clean/negative_binomial_predictions_by_destination_region.csv"))
+# trip.dest.data[year == 2018 & draw == "draw.mean"]
+
+# travel duration
+trip.duration.eg <- 1/0.04713604 # rate of return from mainland eg to bioko
+trip.duration.bi <- 1/0.09670302 # rate of return from trips on bioko
+
+# care seeking behavior
+FeverPf = 0.1116336
+TreatPf = 0.602
+
+# PfPR data
+pfpr.data <- fread(here("data/clean/pfpr_draws.csv"))
+pfpr.data <- merge(pfpr.data, pop.data[year == 2018, .(areaId)], by = "areaId", all = FALSE)
+pfpr.input <- c(pfpr.data$draw.33, 0.6)
+```
+
+
+Dynamical model parameters
+```{r Dynamical model parameters}
+a = 0.3*0.9
+b = 0.55
+c = 0.15
+r = 1./200 # rate at which people become cured
+eta = 1./30 # rate at which prophylaxis wears off
+p = 0.9 # fraction of surviving mosquitoes
+g = 1 - p # fraction of dying mosquitoes
+peip = p^11 # fraction of mosquitoes who survive incubation period
+rho = FeverPf*TreatPf # probability of clearing infection through treatment cascade
+```
+
+
+We need to perform some arithmetic to convert the travel data into a TaR matrix.
+```{r TaR matrix}
+# get the region - to - pixel matrix
+source(here("scripts/region_to_areaId_mapping.R"))
+# convert the trip.dest.data into a matrix
+trip.dest.mat <- as.matrix(trip.dest.data[year == 2018 & draw == "draw.mean", .(t_eg, ti_ban, ti_lub, ti_mal, ti_mok, ti_ria, ti_ure)])
+trip.dest.mat <- rbind(trip.dest.mat, matrix(c(1,0,0,0,0,0,0), ncol = 7))
+# take the matrix product of trip.dest.mat with the region-to-pixel matrix toget pixel-to-pixel:
+movement.matrix <- trip.dest.mat %*% reg.2.pixel
+
+# NB: the movement matrix is the probability of going from each areaId to each other areaId;
+# we need to combine it with the other travel data to obtain the full TaR matrix
+TaR.matrix <- diag(1, nrow = 199, ncol = 199)
+# vector of trip durations across the island and off-island
+trip.duration <- c(rep(trip.duration.bi, 198), trip.duration.eg)
+# vector of frequencies at which people leave home
+# where we divide by 56 to transform the probability of leaving into 
+# the frequency of leaving during the study period
+trip.freq <- c((trip.freq.data[year == 2018]$draw.mean)/56, 1)
+for (i in 1:199){
+  TaR.matrix[i,] <- (movement.matrix[i,]*trip.duration)/(sum(movement.matrix[i,]*trip.duration) + 1/trip.freq[i])
+  TaR.matrix[i,i] <- 1 - sum(TaR.matrix[i,])
+  TaR.matrix[i,] <- TaR.matrix[i,]/sum(TaR.matrix[i,])
+}
+#rowSums(TaR.matrix)
+#diag(TaR.matrix)
+## Observation: most people spent > 90% of their time at home!
+```
+
+We need to perform some arithmetic to derive the EIR based off of the TaR matrix calculated above.  At the same time we can derive lambda and sporozoite rate, which we will also need for parameterizing the simulation
+```{r Derive EIR}
+pfpr.input <- c(pfpr.data$draw.mean, 0.6)
+
+odds.vector <- r/(1-rho)*pfpr.input/(1-(1+rho*r/eta/(1-rho))*pfpr.input)
+h.FOI <- MASS::ginv(TaR.matrix) %*% odds.vector
+h.FOI[which(h.FOI < 0)] <- 0
+
+# Some summary statistics
+#hist(h.FOI[1:198])
+#which(h.FOI[1:198] < 0)
+#length(which(h.FOI[1:198] < 0))
+
+# Recall, h = b*EIR, the rate of happenings = EIR * rate of successful transmission
+
+# If we want to calibrate the model to include visitors + residents in the PfPR values
+# but more generally, the way we've set up the model analytically only accounts for people who live
+# at i becoming infected - it might not work this way in practice;
+# In any case, the values of h are only off by a few percent at most, so it won't make a huge difference
+# to the simulation calibration. 
+# populations including visitors
+# H.visitors <- c(pop.data[year == 2018]$pop, 0) %*% TaR.matrix
+# # sick populations, including visitors
+# X.visitors <- (c(pop.data[year == 2018]$pop, 0) * pfpr.input)  %*% TaR.matrix
+# # This is the number of people 
+# pfpr.input.visitors <- X.visitors/H.visitors
+# pfpr.input.visitors[199] <- .6
+# odds.vector <- as.matrix(r*pfpr.input.visitors/(1-rho)/( 1- (1 + r*rho/eta/(1-rho))*pfpr.input.visitors))
+# h.FOI<- ginv(TaR.matrix) %*% t(odds.vector.visitors)
+```
+
+```{r Derive Initial Conditions for Mosquitoes}
+# we begin by calculating the fraction of infected mosquitoes, the sporozoite rate, from the Ross-Macdonald equations + Kappa
+# Total population, including visitors
+H.visitors <- t(c(pop.data[year == 2018]$pop, 0) %*% TaR.matrix)
+# Sick population, including visitors
+X.visitors <- t((c(pop.data[year == 2018]$pop, 0) * pfpr.input)  %*% TaR.matrix)
+# This is the number of people who are sick, including visitors and residents both
+kappa <- X.visitors/H.visitors
+kappa[199] <- .6
+z.spz <- peip*a*c*kappa/(p*a*c*kappa + (1-p))
+# this is Z/M, but we currently do not know M
+M = h.FOI*H.visitors/a/b/z.spz
+
+Z = z.spz * M
+Z[199] = 0 # for off-island
+Y = Z/peip
+Y[199] = 0 # for off-island
+```
+
+
+```{r Derive Lambda}
+# We use this quantity to set the emergence rate of mosquitoes in each of the patches
+# this is Lambda, calculated based on equilibrium value for the emergence process
+Lambda = M*(1-p)/p
+Lambda[199] = 0 # for off-island
+```
+
+
+Should probably make a map of where everything is:
+```{r Mapping, eval = FALSE}
+# Here's where we draw areasf from, which can also be found in the PR_surface_draw_assembly.R script
+
+# bioko <- rgdal::readOGR("/Users/dtcitron/Documents/MASH/MASH-Main/MASH-dev/DanielCitron/Bioko_Island_Cluster_Simulations/BI_maps/bioko", "bioko_admin1")
+# areas_inh <- rgdal::readOGR("/Users/dtcitron/Documents/MASH/MASH-Main/MASH-dev/DanielCitron/Bioko_Island_Cluster_Simulations/BI_maps/areas_inh", "areas_inh")
+# areasf <- fortify(areas_inh, region = "areaId")
+
+h.data = data.table(areaId = areaId.list, h = h.FOI[1:198])
+h.data[areaId == 3500]$areaId <- 3559
+area.data = merge(areasf, h.data,by.x = "id", by.y = "areaId", all = FALSE)
+#area.data = merge(areasf, dt, by.x = "id", by.y = "areaId", all=FALSE)
+plot.data <- area.data[order(area.data$order), ]
+p1 = ggplot(data = plot.data, aes(x=long, y=lat, group = group))
+p2 = p1 + geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill="grey", size = 0.25)
+map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group, fill = h), color = NA, size = 0.25) +
+  scale_fill_gradient(name="h", low="yellow", high="red", limits=c(0,.0037)) +
+  geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill=NA, size = 0.25) +
+  theme(axis.line=element_blank(),axis.text.x=element_blank(), axis.text.y=element_blank(),axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(), panel.background=element_blank(), legend.position=c(0.2, 0.8)) + 
+  coord_equal()
+map
+```
+
+
+## Parameterizing:
+
+```{r PfSI Parameters}
+# vector of parameters 
+pfsi_pars <- pfsi_parameters(FeverPf = 0.1116336, TreatPf = 0.602)
+```
+
+There are 199 patches in the Bioko Island model.  198 of them are the populated areaId's from the 2018 census.  The last one (indexed by 199) is a *reservoir patch* representing off-island travel on Mainland EG.
+
+```{r Set up Patch Parameters}
+# set up patches (n is how many patches we have)
+n.patch <- 199 # 194 + 1 : the last patch is off-island
+
+# set the EIR off-island
+eg.eir <- h.FOI[199]/b
+
+patch_pars <- patches_parameters(move = movement.matrix,
+                                 bWeightZoo = rep(0,n.patch),
+                                 bWeightZootox = rep(0,n.patch),
+                                 reservoir = c(rep(F,(n.patch-1)), T),
+                                 res_EIR = c(rep(0,(n.patch-1)),eg.eir)
+)
+```
+
+```{r Set up Mosquito Parameters}
+psi <- Matrix::sparseMatrix(i = {},j = {},x = 0.0,dims = c(n.patch,n.patch))
+diag(psi) <- rep(1,n.patch)
+lambda.matrix = t(matrix(Lambda, nrow = n.patch, ncol = 365))
+mosy_pars <- mosquito_rm_conpars(N = n.patch,
+                                 lambda = lambda.matrix,
+                                 psi = psi,
+                                 EIP = rep(11,365),
+                                 M = M,
+                                 Y = Y,
+                                 Z = Z)
+```
+
+
+```{r Set up Human Parameters}
+# human populations
+# number of people in each patch
+patch.human.pop <- c(pop.data[year == 2018]$pop, 0) 
+# malaria prevalence in each patch
+pfpr <- pfpr.input
+# total number of humans
+n.humans <- sum(patch.human.pop) 
+
+# sample S or I for each person
+# set seed first, for the sake of reproducibility
+set.seed(42L)
+init_state <- unlist(
+  mapply(FUN = function(n,pr){
+    sample(x = c("I","S"),size = n,replace = T,prob = c(pr,1-pr))
+    },
+  n=patch.human.pop,
+  pr=pfpr.input,
+  SIMPLIFY = F)
+  )
+
+# Define Patch IDs, for where people go
+# These IDs correspond to indices in a vector - need it to be 0-indexed for c++
+patch_id <- rep(0:(n.patch-1), times=patch.human.pop)
+
+# Set uniform biting weights; this could follow any density on the positive reals (gamma, log-normal, weibull, etc.)
+bweights <- rep(1,n.humans)
+
+# Set mean trip durations based on destination
+trip.durations <- c(rep(trip.duration.bi, 198), trip.duration.eg)
+# Set trip frequencies - this is set according to one's home origin patch
+trip.freqs <- rep(trip.freq.data[year == 2018]$draw.mean/56, times = patch.human.pop[1:198])
+
+
+# the data structure that will be passed down to C++ to construct the human pop
+human_pars <- vector("list",n.humans)
+for(i in 1:n.humans){
+  human_pars[[i]] <- human_pfsi_conpars(id = i-1,
+                                        home_patch_id = patch_id[i],
+                                        trip_duration = trip.durations,
+                                        trip_frequency = trip.freqs[i],
+                                        bweight = bweights[i],
+                                        age = 20,
+                                        state = init_state[i],
+                                        bite_algorithm = 0)
+}
+```
+
+```{r Set Vaccinations}
+# In this case, we will set the vaccination schedule to no vaccinations
+# vaccinations (can uncomment the code below to vaccinate 25% of the population at day 500)
+# vaxx_pars <- list()
+
+# Come up with a  list of people to be vaccinated
+#vaxx_id <- sample(x = 0:(nh-1),size = nh*0.25,replace = F)
+# vaxx_pars <- lapply(X = vaxx_id,FUN = function(id){
+#   vaccination_pfsi_conpars(id = id,
+#                            t = 5e2,
+#                            treat = T,
+#                            type = "PE")
+# })
+```
+
+```{r Set output filenames and paths}
+log_pars <- list()
+#h_inf <- paste0(path,"pfsi.csv")
+h_inf <- here("data/simulation_outputs/run1/pfsi.csv")
+log_pars[[1]] <- list(outfile = h_inf, 
+                      key = "pfsi",
+                      header = paste0(c("time",
+                                        "patch",
+                                        unlist(lapply(c("S","I","P"),function(x){
+                                          paste0(x,c("_visitor","_resident_home","_resident_away"))}
+                                          )),
+                                        "incidence_resident",
+                                        "incidence_traveller"),
+                                      collapse = ",")
+                    )
+#mosy <- paste0(path,"mosy.csv")
+mosy <-  here("data/simulation_outputs/run1/mosy.csv")
+log_pars[[2]] <- list(outfile = mosy,
+                      key = "mosquito",
+                      header = paste0(c("time",
+                                        "state",
+                                        paste0("patch",1:n.patch)),
+                                      collapse = ","))
+```
+
+```{r Run a simulation}
+# Set random seed, for reproducibility
+set.seed(1L)
+# 
+run_macro(tmax = 100,
+          human_pars = human_pars,
+          mosquito_pars = mosy_pars,
+          patch_pars = patch_pars,
+          model_pars = pfsi_pars,
+          log_streams = log_pars,
+          vaxx_events = vaxx_pars,
+          verbose = T)
+```
+
+```{r Handling a single set of outputs}
+dt <- fread(h_inf)
+
+# Where are the patch indexes for a handful of patches?
+which(areaId.list == 220) # in Malabo
+which(areaId.list == 335) # in Malabo
+which(areaId.list == 502) # Basupu
+which(areaId.list == 1175) # in Baney
+which(areaId.list == 2199) # in Luba
+which(areaId.list == 2457) # in Riaba
+patch.human.pop[c(9, 31, 67, 121, 171, 175)]
+
+# Create a new data table to merge onto the simulation output, to track population denominators over time
+pop.dt <- data.table(patch = c(0:(198-1)), areaId = areaId.list)
+pop.dt <- merge(pop.dt, pop.data[year == 2018, .(areaId, pop)], by = "areaId")
+# merge, to use the pop column as a denominator when calculating fractions susceptible, infected, protected
+dt <- merge(dt, pop.dt, by = "patch")
+dt[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "patch" , "time")]
+dt[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "patch" , "time")]
+dt[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "patch" , "time")]
+
+View(dt[patch %in% (c(9, 31, 67, 121, 171, 175) - 1)])
+
+h <- melt(dt[patch %in% (c(9, 31, 67, 121, 171, 175) - 1)],
+     id.vars = c("time", "areaId"), 
+     measure.vars = c("s","i","p"),
+     value.name = "fraction")
+
+ggplot(data = h) + 
+  geom_point(mapping = aes(x = time, y = fraction, color = variable), shape = 20, size = .01) + 
+  facet_wrap(~areaId)
+```
+
+```{r Ensemble Run}
+# run ensemble
+nrun <- 10
+tsteps <- 100
+pb <- txtProgressBar(min = 1,max = nrun)
+
+for(i in 1:nrun){
+  
+  log_pars <- list()
+  h_inf <- here("data/simulation_outputs/ensemble_run", paste0("pfsi_ens_",i,".csv"))
+  log_pars[[1]] <- list(outfile = h_inf, 
+                        key = "pfsi",
+                        header = paste0(c("time",
+                                          "patch",
+                                          unlist(lapply(c("S","I","P"),function(x){
+                                            paste0(x,c("_visitor","_resident_home","_resident_away"))}
+                                            )),
+                                          "incidence_resident",
+                                          "incidence_traveller"),
+                                        collapse = ",")
+                      )
+
+  mosy <-  here("data/simulation_outputs/ensemble_run", paste0("mosy_ens_",i,".csv"))
+  log_pars[[2]] <- list(outfile = mosy,
+                        key = "mosquito",
+                        header = paste0(c("time",
+                                          "state",
+                                          paste0("patch",1:n.patch)),
+                                        collapse = ","))
+  
+# set seed for reproducibility
+set.seed(i)
+
+# set initial conditions
+init_state <- unlist(
+  mapply(FUN = function(n,pr){
+    sample(x = c("I","S"),size = n,replace = T,prob = c(pr,1-pr))
+    },
+  n=patch.human.pop,
+  pr=pfpr.input,
+  SIMPLIFY = F)
+  )
+
+# the data structure that will be passed down to C++ to construct the human pop
+human_pars <- vector("list",n.humans)
+for(i in 1:n.humans){
+  human_pars[[i]] <- human_pfsi_conpars(id = i-1,
+                                        home_patch_id = patch_id[i],
+                                        trip_duration = trip.durations,
+                                        trip_frequency = trip.freqs[i],
+                                        bweight = bweights[i],
+                                        age = 20,
+                                        state = init_state[i],
+                                        bite_algorithm = 0)
+}
+
+run_macro(tmax = tsteps,
+          human_pars = human_pars,
+          mosquito_pars = mosy_pars,
+          patch_pars = patch_pars,
+          model_pars = pfsi_pars,
+          log_streams = log_pars,
+          vaxx_events = NULL,
+          verbose = FALSE)
+
+  setTxtProgressBar(pb,i)
+}
+```
+
+```{r Analyze ensemble}
+ensemble.file.list <- list.files(path = here("data/simulation_outputs/ensemble_run"),
+                                 pattern = "pfsi_ens_[[:digit:]]+.csv")
+
+# load in the first one
+df_curr <- fread(here("data/simulation_outputs/ensemble_run",ensemble.file.list[1]))
+# copy it to create the corresponding matrix:
+mat_curr <- as.matrix(df_curr)
+# then we use that matrix to create holders to catch data for the means and standard deviations:
+mat_mean <- mat_curr[, 3:ncol(mat_curr)]
+mat_sd <- mat_mean^2
+
+# now we loop over the other files in the list of ensemble outputs
+nrun = length(ensemble.file.list)
+for (i in 2:nrun){
+  df_curr <- fread(here("data/simulation_outputs/ensemble_run",ensemble.file.list[i]))
+  mat_curr <- as.matrix(df_curr)
+  mat_mean <- mat_mean + mat_curr[, 3:ncol(mat_curr)]
+  mat_sd <-  mat_sd + mat_curr[, 3:ncol(mat_curr)]^2
+}
+
+mat_mean <- mat_mean/nrun
+mat_sd <- sqrt(mat_sd/nrun - mat_mean^2)
+
+mat_mean <- cbind(df_curr[,1:2], as.data.table(mat_mean))
+mat_sd <- cbind(df_curr[,1:2], as.data.table(mat_sd))
+
+# Create a new data table to merge onto the simulation output, to track population denominators over time
+pop.dt <- data.table(patch = c(0:(198-1)), areaId = areaId.list)
+pop.dt <- merge(pop.dt, pop.data[year == 2018, .(areaId, pop)], by = "areaId")
+# merge, to use the pop column as a denominator when calculating fractions susceptible, infected, protected
+mat_mean <- merge(mat_mean, holder, by = "patch")
+mat_mean[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "patch" , "time")]
+mat_mean[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "patch" , "time")]
+mat_mean[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "patch" , "time")]
+# do the same thing with the standard deviations
+mat_sd <- merge(mat_sd, holder, by = "patch")
+mat_sd[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "patch" , "time")]
+mat_sd[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "patch" , "time")]
+mat_sd[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "patch" , "time")]
+
+#View(mat_mean[areaId %in% c(220,335,502,1175,2199,2457)])
+
+h <- melt(mat_mean[areaId %in% c(220,335,502,1175,2199,2457)],
+     id.vars = c("time", "areaId"), 
+     measure.vars = c("s","i","p"),
+     value.name = "fraction")
+
+h.sd <- melt(mat_sd[areaId %in% c(220,335,502,1175,2199,2457)],
+     id.vars = c("time", "areaId"), 
+     measure.vars = c("s","i","p"),
+     value.name = "fraction.sd")
+h <- merge(h, h.sd, by = c("time", "areaId", "variable"))
+
+ggplot(data = h) + 
+  geom_errorbar(mapping = aes(x = time, ymin = fraction - fraction.sd, ymax = fraction + fraction.sd, color = variable, alpha = 0.1)) + 
+  geom_point(mapping = aes(x = time, y = fraction, color = variable), shape = 20, size = .01) + 
+  facet_wrap(~areaId)
+```
+
+Try again, and double-check that the variances across the 3 different quantities should be different:
+```{r}
+
+ensemble.file.list <- list.files(path = here("data/simulation_outputs/ensemble_run"),
+                                 pattern = "pfsi_ens_[[:digit:]]+.csv")
+
+# load in the first one
+df_curr <- fread(here("data/simulation_outputs/ensemble_run",ensemble.file.list[1]))
+df_curr <- merge(holder, df_curr, by = "patch")
+df_curr[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "patch" , "time")]
+df_curr[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "patch" , "time")]
+df_curr[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "patch" , "time")]
+# copy it to create the corresponding matrix:
+mat_curr <- as.matrix(df_curr)
+# then we use that matrix to create holders to catch data for the means and standard deviations:
+mat_mean <- mat_curr
+mat_sd <- mat_mean
+mat_sd[, 5:ncol(mat_curr)] <- mat_mean[, 5:ncol(mat_curr)]^2
+# now we loop over the other files in the list of ensemble outputs
+nrun = length(ensemble.file.list)
+for (i in 2:nrun){
+  df_curr <- fread(here("data/simulation_outputs/ensemble_run",ensemble.file.list[i]))
+  
+  df_curr <- merge(holder, df_curr, by = "patch")
+  df_curr[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "patch" , "time")]
+  df_curr[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "patch" , "time")]
+  df_curr[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "patch" , "time")]
+  
+  mat_curr <- as.matrix(df_curr)
+  mat_mean[, 5:ncol(mat_curr)] <- mat_mean[, 5:ncol(mat_curr)] + mat_curr[, 5:ncol(mat_curr)]
+  mat_sd[, 5:ncol(mat_curr)] <-  mat_sd[, 5:ncol(mat_curr)] + mat_curr[, 5:ncol(mat_curr)]^2
+}
+mat_mean <- as.data.table(mat_mean)
+mat_sd <- as.data.table(mat_sd)
+
+mat_mean[, 5:ncol(mat_curr)] <- mat_mean[, 5:ncol(mat_curr)]/nrun
+mat_sd[, 5:ncol(mat_curr)] <- mat_sd[, 5:ncol(mat_curr)]/nrun - mat_mean[, 5:ncol(mat_curr)]^2
+mat_sd[mat_sd < 0] <- 0
+mat_sd[, 5:ncol(mat_curr)] <- sqrt(mat_sd[, 5:ncol(mat_curr)])
+
+h <- melt(mat_mean[areaId %in% c(220,335,502,1175,2199,2457)],
+     id.vars = c("time", "areaId"), 
+     measure.vars = c("s","i","p"),
+     value.name = "fraction")
+h.sd <- melt(mat_sd[areaId %in% c(220,335,502,1175,2199,2457)],
+     id.vars = c("time", "areaId"), 
+     measure.vars = c("s","i","p"),
+     value.name = "fraction.sd")
+h <- merge(h, h.sd, by = c("time", "areaId", "variable"))
+
+ggplot(data = h) + 
+  geom_errorbar(mapping = aes(x = time, ymin = fraction - fraction.sd, ymax = fraction + fraction.sd, color = variable, alpha = 0.1)) + 
+  geom_point(mapping = aes(x = time, y = fraction, color = variable), shape = 20, size = .01) + 
+  facet_wrap(~areaId)
+
+h[, .(mean(fraction), mean(fraction.sd)), by = c("areaId", "variable")]
+
+pfpr.input[c(9, 31, 67, 121, 171, 175)]
+
+```
+
+Now the problem is that the error bars are very obviously too small: need to load in each set one at a time and compare across because I don't trust how this is going now...
+```{r}
+df <- fread(here("data/simulation_outputs/ensemble_run",ensemble.file.list[1]))
+df <- merge(pop.dt, df, by = "patch")
+df[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "patch" , "time")]
+df[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "patch" , "time")]
+df[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "patch" , "time")]
+df[, run := 1]
+
+for(k in 2:10){
+  df_curr <- fread(here("data/simulation_outputs/ensemble_run",ensemble.file.list[k]))
+  df_curr <- merge(pop.dt, df_curr, by = "patch")
+  df_curr[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "patch" , "time")]
+  df_curr[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "patch" , "time")]
+  df_curr[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "patch" , "time")]
+  df_curr[, run := k]
+  df <- rbind(df, df_curr)
+}
+
+
+h.2 <- df[areaId %in% c(220,335,502,1175,2199,2457)]
+
+
+h[areaId == 335 & time == 25]
+h[areaId == 335 & time == 25]$s
+mean(h[areaId == 335 & time == 25]$s)
+sd(h[areaId == 335 & time == 25]$s)
+
+(h[areaId == 335 & time == 99]$S_resident_home + h[areaId == 335 & time == 99]$S_resident_away)/h[areaId == 335 & time == 99]$pop
+mean((h[areaId == 335 & time == 99]$S_resident_home + h[areaId == 335 & time == 99]$S_resident_away)/h[areaId == 335 & time == 99]$pop)
+sd((h[areaId == 335 & time == 99]$S_resident_home + h[areaId == 335 & time == 99]$S_resident_away)/h[areaId == 335 & time == 99]$pop)
+
+
+mean((h.2[areaId == 335 & time == 99]$I_resident_home + h.2[areaId == 335 & time == 99]$I_resident_away)/h.2[areaId == 335 & time == 99]$pop)
+sd((h.2[areaId == 335 & time == 99]$I_resident_home + h.2[areaId == 335 & time == 99]$I_resident_away)/h.2[areaId == 335 & time == 99]$pop)
+#mat_mean[, 5:ncol(mat_curr)] <- mat_mean[, 5:ncol(mat_curr)] + mat_curr[, 5:ncol(mat_curr)]
+#mat_sd[, 5:ncol(mat_curr)] <-  mat_sd[, 5:ncol(mat_curr)] + mat_curr[, 5:ncol(mat_curr)]^2
+
+```
+
