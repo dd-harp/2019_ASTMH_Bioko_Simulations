@@ -1,7 +1,7 @@
 ---
-title: "bioko_island_workflow.Rmd"
+title: "bioko_island_workflow_vaccinations"
 author: "Daniel T. Citron"
-date: "10/2/2019"
+date: "10/14/2019"
 output: html_document
 ---
 
@@ -14,6 +14,9 @@ knitr::opts_chunk$set(echo = TRUE)
 We will parameterize our simulation of Bioko Island using the data and parameters derived from the 2015-2018 data.  We will imagine the island as it was in 2018, with the 2018 census and PR estimates.  We will use the 2015-2017 data to characterize some other aspects of the model, such as travel behavior and care-seeking and treatment behavior.
 
 We will need to calibrate the force of infection and mosquito emergence rates based on the combination of the travel model and whatever draw we take from our ensemble of posterior distribution draws. We will write a function that produces the FOI and emergence rates. We will need to check whether the local FOI and the mosquito emergence rates are positive. 
+
+## Adding vaccinations
+We will add in vaccinations to the simulation.  We parameterize these vaccinations in a number of different ways: first, we have to say how long the vaccination lasts, and how effective it is; second, we have to say who gets the vaccination and when; third, we have to say whether people receiving the vaccination also receive prophylaxis.
 
 ```{r Load Libraries}
 library(data.table)
@@ -44,11 +47,18 @@ trip.duration.bi <- 1/0.09670302 # rate of return from trips on bioko
 # care seeking behavior
 FeverPf = 0.1116336
 TreatPf = 0.602
+mnChemoprophylaxisPf = 32 # duration of prophylaxis
 
 # PfPR data
 pfpr.data <- fread(here("data/clean/pfpr_draws.csv"))
 pfpr.data <- merge(pfpr.data, pop.data[year == 2018, .(areaId)], by = "areaId", all = FALSE)
 pfpr.input <- c(pfpr.data$draw.33, 0.6)
+
+# Vaccination parameters
+PEProtectPf = 1 # probability that the vaccine will work in the person who receives it 
+peBlockPf = .5 # factor which represents the % decrease in the efficacy, ie b -> b*(1-peBlockPf)
+mnPEPf = 300# duration of vaccine
+vrPEPf = 60 # variance in duration of vaccine
 ```
 
 
@@ -184,7 +194,11 @@ map
 
 ```{r PfSI Parameters}
 # vector of parameters 
-pfsi_pars <- pfsi_parameters(FeverPf = 0.1116336, TreatPf = 0.602)
+pfsi_pars <- pfsi_parameters(FeverPf = 0.1116336, TreatPf = 0.602,
+                             mnChemoprophylaxisPf = mnChemoprophylaxisPf,
+                             PEProtectPf = PEProtectPf,
+                             peBlockPf = peBlockPf,
+                             mnPEPf = mnPEPf, vrPEPf = vrPEPf)
 ```
 
 There are 199 patches in the Bioko Island model.  198 of them are the populated areaId's from the 2018 census.  The last one (indexed by 199) is a *reservoir patch* representing off-island travel on Mainland EG.
@@ -267,24 +281,38 @@ for(i in 1:n.humans){
 ```
 
 ```{r Set Vaccinations}
-# In this case, we will set the vaccination schedule to no vaccinations
-# vaccinations (can uncomment the code below to vaccinate 25% of the population at day 500)
-# vaxx_pars <- list()
-
-# Come up with a  list of people to be vaccinated
-#vaxx_id <- sample(x = 0:(nh-1),size = nh*0.25,replace = F)
-# vaxx_pars <- lapply(X = vaxx_id,FUN = function(id){
-#   vaccination_pfsi_conpars(id = id,
-#                            t = 5e2,
-#                            treat = T,
-#                            type = "PE")
-# })
+# In this case, we will set vaccinations to occur three times for each year after the first 2 years of burn-in time, together with prophylaxis
+# Vaccinate everybody (that's right, everybody)
+vaxx_id <- 1:n.humans
+# Set vaccination schedule for each human
+# List of vaccination events - first round
+vaxx_pars_1 <- lapply(X = vaxx_id,FUN = function(id){
+  vaccination_pfsi_conpars(id = 1,
+                           t = 365*2,
+                           treat = T,
+                           type = "PE")
+})
+# List of vaccination events - second round
+vaxx_pars_2 <- lapply(X = vaxx_id,FUN = function(id){
+  vaccination_pfsi_conpars(id = 1,
+                           t = 365*3,
+                           treat = T,
+                           type = "PE")
+})
+# List of vaccination events - third round
+vaxx_pars_3 <- lapply(X = vaxx_id,FUN = function(id){
+  vaccination_pfsi_conpars(id = 1,
+                           t = 365*4,
+                           treat = T,
+                           type = "PE")
+})
+vaxx_pars <- rbind(vaxx_pars_1, vaxx_pars_2, vaxx_pars_3)
 ```
 
 ```{r Set output filenames and paths}
 log_pars <- list()
 #h_inf <- paste0(path,"pfsi.csv")
-h_inf <- here("data/simulation_outputs/run1/pfsi.csv")
+h_inf <- here("data/simulation_outputs/vaxx/pfsi.csv")
 log_pars[[1]] <- list(outfile = h_inf, 
                       key = "pfsi",
                       header = paste0(c("time",
@@ -297,7 +325,7 @@ log_pars[[1]] <- list(outfile = h_inf,
                                       collapse = ",")
                     )
 #mosy <- paste0(path,"mosy.csv")
-mosy <-  here("data/simulation_outputs/run1/mosy.csv")
+mosy <-  here("data/simulation_outputs/vaxx/mosy.csv")
 log_pars[[2]] <- list(outfile = mosy,
                       key = "mosquito",
                       header = paste0(c("time",
@@ -310,7 +338,7 @@ log_pars[[2]] <- list(outfile = mosy,
 # Set random seed, for reproducibility
 set.seed(1L)
 # 
-run_macro(tmax = 100,
+run_macro(tmax = 1000,
           human_pars = human_pars,
           mosquito_pars = mosy_pars,
           patch_pars = patch_pars,
@@ -341,7 +369,7 @@ dt[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "patch" , "ti
 dt[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "patch" , "time")]
 dt[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "patch" , "time")]
 
-#View(dt[patch %in% (c(9, 31, 67, 121, 171, 175) - 1)])
+View(dt[patch %in% (c(9, 31, 67, 121, 171, 175) - 1)])
 
 h <- melt(dt[patch %in% (c(9, 31, 67, 121, 171, 175) - 1)],
      id.vars = c("time", "areaId"), 

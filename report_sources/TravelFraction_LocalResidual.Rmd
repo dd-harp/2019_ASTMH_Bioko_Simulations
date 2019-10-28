@@ -1,0 +1,221 @@
+---
+title: "TravelFraction_LocalResidual"
+author: "Daniel T. Citron"
+date: "10/22/2019"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Set working directory
+library(here)
+library(data.table)
+library(latex2exp)
+library(rootSolve)
+library(raster)
+library(rgdal, quietly = TRUE)
+library(ggplot2, quietly = TRUE)
+library(viridis)
+```
+
+# Read in data
+Read in maps first - these will be sourced ou
+```{r Set up Creating Maps, include = TRUE}
+## Setup for creating maps:
+# Read in shape files of Bioko Island and the area-level grid
+bioko <- readOGR(here("data/clean/BI_maps/bioko"), "bioko_admin1")
+areas_inh <- readOGR(here("data/clean/BI_maps/areas_inh"), "areas_inh")
+areasf<-fortify(areas_inh, region = "areaId")
+```
+
+Read in LR/TF surfaces. These were originally generated for the Nature Communications paper.
+```{r NComms LR/TF surfaces}
+tf.lr <- fread(here("data/clean/lr_tf_surfaces.csv"))
+```
+
+Now we are going to plot estimates of TF and LR, as generated from the simulation.  These are the mean values
+```{r Simulated TF results}
+#tf.sim <- fread(here("data/simulation_outputs/TF_LR_Sim_Results/mean_tf_estimates.csv"))
+tf.sim <- fread(here("data/simulation_outputs/TF_LR_Sim_Results/travel_fraction_estimates_baseline.csv"))
+tf.sim <- tf.sim[!is.na(mean) & mean > 0 & time > 1000, .(mean.tf = mean(mean), sd.tf = mean(sd)), by = areaId]
+tf.sim[areaId == 3500]$areaId <- 3559
+tf.sim[mean.tf > 1]$mean.tf <- 1
+
+tf.lr <- merge(tf.lr, tf.sim, by = "areaId")
+
+tf.sim <- fread(here("data/simulation_outputs/TF_LR_Sim_Results/travel_fraction_estimates_baseline_SU.csv"))
+tf.sim <- tf.sim[!is.na(mean) & mean > 0 & time > 1000, .(mean.tf_SU = mean(mean), sd.tf_SU = mean(sd)), by = areaId]
+tf.sim[areaId == 3500]$areaId <- 3559
+tf.sim[mean.tf_SU > 1]$mean.tf_SU <- 1
+
+tf.lr <- merge(tf.lr, tf.sim, by = "areaId")
+```
+
+```{r Simulated LR results}
+lr.sim <- fread(here("data/simulation_outputs/TF_LR_Sim_Results/local_residual_estimates_baseline.csv"))
+lr.sim <- lr.sim[!is.na(mean) & mean > 0 & time > 1000, .(mean.lr = mean(mean), sd.lr = mean(sd)), by = areaId]
+lr.sim[areaId == 3500]$areaId <- 3559
+lr.sim[mean.lr > 1]$mean.lr <- 1
+tf.lr <- merge(tf.lr, lr.sim, by = "areaId")
+
+lr.sim <- fread(here("data/simulation_outputs/TF_LR_Sim_Results/local_residual_estimates_baseline_SU.csv"))
+lr.sim <- lr.sim[!is.na(mean) & mean > 0 & time > 1000, .(mean.lr_SU = mean(mean), sd.lr_SU = mean(sd)), by = areaId]
+lr.sim[areaId == 3500]$areaId <- 3559
+lr.sim[mean.lr_SU > 1]$mean.lr_SU <- 1
+tf.lr <- merge(tf.lr, lr.sim, by = "areaId")
+```
+
+
+Generate base for making plots
+```{r}
+area.data = merge(areasf, tf.lr, by.x = "id", by.y = "areaId", all=TRUE)
+plot.data<-area.data[order(area.data$order), ]
+p1 = ggplot(data = plot.data, aes(x=long, y=lat, group = group))
+p2 = p1 + geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill="grey", size = 0.25)
+```
+
+Plot Travel Fraction, calculated for the NComms article
+```{r NComms TF calculations}
+map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group, fill = tf.co.e), color = NA, size = 0.25) +
+  scale_fill_gradient(name="h", low="yellow", high="red", limits=c(0,1)) +
+  #scale_fill_viridis(name="Travel Fraction", limits=c(0, 1), option="cividis") + 
+  geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill=NA, size = 0.25) +
+  theme(axis.line=element_blank(),axis.text.x=element_blank(), axis.text.y=element_blank(),axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(), panel.background=element_blank(), legend.position=c(0.2, 0.8)) + 
+  coord_equal()
+map
+```
+
+```{r Simulation TF measurements - Baseline}
+map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group, fill = mean.tf), color = NA, size = 0.25) +
+  scale_fill_gradient(name="TF, Baseline", low="yellow", high="red", limits=c(0,1)) +
+  #scale_fill_viridis(name="Travel Fraction", limits=c(0, 1), option="cividis") + 
+  geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill=NA, size = 0.25) +
+  theme(axis.line=element_blank(),axis.text.x=element_blank(), axis.text.y=element_blank(),axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(), panel.background=element_blank(), legend.position=c(0.2, 0.8)) + 
+  coord_equal()
+map
+```
+
+```{r Simulation TF measurements - Spatial Uncertainty}
+map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group, fill = mean.tf_SU), color = NA, size = 0.25) +
+  scale_fill_gradient(name="TF, SU", low="yellow", high="red", limits=c(0,1)) +
+  #scale_fill_viridis(name="Travel Fraction", limits=c(0, 1), option="cividis") + 
+  geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill=NA, size = 0.25) +
+  theme(axis.line=element_blank(),axis.text.x=element_blank(), axis.text.y=element_blank(),axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(), panel.background=element_blank(), legend.position=c(0.2, 0.8)) + 
+  coord_equal()
+map
+```
+
+# Travel Fraction Uncertainty
+```{r Data processing}
+summary(tf.lr$sd.tf)
+hist(tf.lr$sd.tf)
+tf.lr$sd.tf.holder <- 1
+tf.lr[sd.tf <= .8]$sd.tf.holder <- 2
+tf.lr[sd.tf <= .6]$sd.tf.holder <- 3
+tf.lr[sd.tf <= .4]$sd.tf.holder <- 4
+tf.lr[sd.tf <= .2]$sd.tf.holder <- 5
+tf.lr$sd.tf.holder <- as.factor(tf.lr$sd.tf.holder)
+
+
+summary(tf.lr$sd.tf_SU)
+hist(tf.lr$sd.tf_SU)
+tf.lr$sd.tf_SU.holder <- 1
+tf.lr[sd.tf_SU <= .8]$sd.tf_SU.holder <- 2
+tf.lr[sd.tf_SU <= .6]$sd.tf_SU.holder <- 3
+tf.lr[sd.tf_SU <= .4]$sd.tf_SU.holder <- 4
+tf.lr[sd.tf_SU <= .2]$sd.tf_SU.holder <- 5
+tf.lr$sd.tf_SU.holder <- as.factor(tf.lr$sd.tf_SU.holder)
+
+
+area.data = merge(areasf, tf.lr, by.x = "id", by.y = "areaId", all=TRUE)
+plot.data<-area.data[order(area.data$order), ]
+p1 = ggplot(data = plot.data, aes(x=long, y=lat, group = group))
+p2 = p1 + geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill="grey", size = 0.25)
+
+```
+
+
+```{r Travel Fraction Uncertainty}
+map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group, fill = sd.tf.holder), color = NA, size = 0.25) +
+  scale_fill_discrete(name = "SD(TF)") +
+  #scale_fill_gradient(name="SD(TF)", low="yellow", high="red", limits=c(0,1)) +
+  #scale_fill_viridis(name="Travel Fraction", limits=c(0, 1), option="cividis") + 
+  geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill=NA, size = 0.25) +
+  theme(axis.line=element_blank(),axis.text.x=element_blank(), axis.text.y=element_blank(),axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(), panel.background=element_blank(), legend.position=c(0.2, 0.8)) + 
+  coord_equal()
+map
+```
+
+
+```{r Travel Fraction Uncertainty, Spatial Uncertainty}
+map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group, fill = sd.tf_SU.holder), color = NA, size = 0.25) +
+  scale_fill_discrete(name = "SD(TF_SU)") +
+  #scale_fill_gradient(name="SD(TF)", low="yellow", high="red", limits=c(0,1)) +
+  #scale_fill_viridis(name="Travel Fraction", limits=c(0, 1), option="cividis") + 
+  geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill=NA, size = 0.25) +
+  theme(axis.line=element_blank(),axis.text.x=element_blank(), axis.text.y=element_blank(),axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(), panel.background=element_blank(), legend.position=c(0.2, 0.8)) + 
+  coord_equal()
+map
+```
+
+
+Travel fraction uncertainty; variance divided by the mean:
+```{r}
+map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group, fill = sd.tf/mean.tf), color = NA, size = 0.25) +
+  scale_fill_gradient(name="SD(TF)", low="yellow", high="red", limits=c(0,2)) +
+  #scale_fill_viridis(name="Travel Fraction", limits=c(0, 1), option="cividis") + 
+  geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill=NA, size = 0.25) +
+  theme(axis.line=element_blank(),axis.text.x=element_blank(), axis.text.y=element_blank(),axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(), panel.background=element_blank(), legend.position=c(0.2, 0.8)) + 
+  coord_equal()
+map
+```
+
+```{r}
+map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group, fill = sd.tf_SU/mean.tf_SU), color = NA, size = 0.25) +
+  scale_fill_gradient(name="SD(TF)", low="yellow", high="red", limits=c(0,2)) +
+  #scale_fill_viridis(name="Travel Fraction", limits=c(0, 1), option="cividis") + 
+  geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill=NA, size = 0.25) +
+  theme(axis.line=element_blank(),axis.text.x=element_blank(), axis.text.y=element_blank(),axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(), panel.background=element_blank(), legend.position=c(0.2, 0.8)) + 
+  coord_equal()
+map
+```
+
+Plot Local Residual fraction of FOI, calculated for the NComms article
+```{r}
+map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group, fill = lr.co.e), color = NA, size = 0.25) +
+  scale_fill_viridis(name="Local Residual\nTransmission", limits=c(0, .4), option="plasma") +
+  geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill=NA, size = 0.25) +
+  theme(axis.line=element_blank(),axis.text.x=element_blank(), axis.text.y=element_blank(),axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(), panel.background=element_blank(), legend.position=c(0.2, 0.8)) + 
+  coord_equal()
+map
+```
+
+Local Residual Fraction, simulated via comparison to baseline:
+```{r}
+map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group, fill = mean.lr), color = NA, size = 0.25) +
+  scale_fill_viridis(name="Local Residual\nTransmission", limits=c(0, .4), option="plasma") +
+  geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill=NA, size = 0.25) +
+  theme(axis.line=element_blank(),axis.text.x=element_blank(), axis.text.y=element_blank(),axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(), panel.background=element_blank(), legend.position=c(0.2, 0.8)) + 
+  coord_equal()
+map
+```
+

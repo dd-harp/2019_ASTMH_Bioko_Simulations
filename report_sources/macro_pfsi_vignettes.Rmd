@@ -57,7 +57,10 @@ set.seed(42L)
 
 ```{r}
 # vector of parameters 
-pfsi_pars <- pfsi_parameters()
+pfsi_pars <- pfsi_parameters(mnChemoprophylaxisPf = 32,
+                             PEProtectPf = 1, # % of people it works in
+                             peBlockPf = 1, # % decrease
+                             mnPEPf = 200, vrPEPf = 50)
 
 # set up patches (n is how many patches we have)
 n <- 5
@@ -106,6 +109,14 @@ vaxx_id <- sample(x = 0:(nh-1),size = nh*0.25,replace = F)
 vaxx_pars <- lapply(X = vaxx_id,FUN = function(id){
   vaccination_pfsi_conpars(id = id,t = 5e2,treat = T,type = "PE")
 })
+
+# vaxx_pars <- rbind(
+#   lapply(X = vaxx_id,FUN = function(id){
+#     vaccination_pfsi_conpars(id = id,t = 300,treat = T,type = "PE")}),
+#   lapply(X = vaxx_id,FUN = function(id){
+#     vaccination_pfsi_conpars(id = id,t = 600,treat = T,type = "PE")})
+# )
+
 ```
 
 
