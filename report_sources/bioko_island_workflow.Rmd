@@ -48,7 +48,7 @@ TreatPf = 0.602
 # PfPR data
 pfpr.data <- fread(here("data/clean/pfpr_draws.csv"))
 pfpr.data <- merge(pfpr.data, pop.data[year == 2018, .(areaId)], by = "areaId", all = FALSE)
-pfpr.input <- c(pfpr.data$draw.33, 0.6)
+pfpr.input <- c(pfpr.data$draw.33, 0.46)
 ```
 
 
@@ -78,14 +78,14 @@ movement.matrix <- trip.dest.mat %*% reg.2.pixel
 
 # NB: the movement matrix is the probability of going from each areaId to each other areaId;
 # we need to combine it with the other travel data to obtain the full TaR matrix
-TaR.matrix <- diag(1, nrow = 199, ncol = 199)
+TaR.matrix <- diag(1, nrow = 242, ncol = 242)
 # vector of trip durations across the island and off-island
-trip.duration <- c(rep(trip.duration.bi, 198), trip.duration.eg)
+trip.duration <- c(rep(trip.duration.bi, 241), trip.duration.eg)
 # vector of frequencies at which people leave home
 # where we divide by 56 to transform the probability of leaving into 
 # the frequency of leaving during the study period
 trip.freq <- c((trip.freq.data[year == 2018]$draw.mean)/56, 1)
-for (i in 1:199){
+for (i in 1:242){
   TaR.matrix[i,] <- (movement.matrix[i,]*trip.duration)/(sum(movement.matrix[i,]*trip.duration) + 1/trip.freq[i])
   TaR.matrix[i,i] <- 1 - sum(TaR.matrix[i,])
   TaR.matrix[i,] <- TaR.matrix[i,]/sum(TaR.matrix[i,])
@@ -97,16 +97,16 @@ for (i in 1:199){
 
 We need to perform some arithmetic to derive the EIR based off of the TaR matrix calculated above.  At the same time we can derive lambda and sporozoite rate, which we will also need for parameterizing the simulation
 ```{r Derive EIR}
-pfpr.input <- c(pfpr.data$draw.mean, 0.6)
+pfpr.input <- c(pfpr.data$draw.mean, 0.43)
 
 odds.vector <- r/(1-rho)*pfpr.input/(1-(1+rho*r/eta/(1-rho))*pfpr.input)
 h.FOI <- MASS::ginv(TaR.matrix) %*% odds.vector
 h.FOI[which(h.FOI < 0)] <- 0
 
-# Some summary statistics
-#hist(h.FOI[1:198])
-#which(h.FOI[1:198] < 0)
-#length(which(h.FOI[1:198] < 0))
+# #Some summary statistics
+# hist(h.FOI[1:198])
+# which(h.FOI[1:198] < 0)
+# length(which(h.FOI[1:198] < 0))
 
 # Recall, h = b*EIR, the rate of happenings = EIR * rate of successful transmission
 
@@ -134,15 +134,15 @@ H.visitors <- t(c(pop.data[year == 2018]$pop, 0) %*% TaR.matrix)
 X.visitors <- t((c(pop.data[year == 2018]$pop, 0) * pfpr.input)  %*% TaR.matrix)
 # This is the number of people who are sick, including visitors and residents both
 kappa <- X.visitors/H.visitors
-kappa[199] <- .6
+kappa[242] <- .43
 z.spz <- peip*a*c*kappa/(p*a*c*kappa + (1-p))
 # this is Z/M, but we currently do not know M
 M = h.FOI*H.visitors/a/b/z.spz
 
 Z = z.spz * M
-Z[199] = 0 # for off-island
+Z[242] = 0 # for off-island
 Y = Z/peip
-Y[199] = 0 # for off-island
+Y[242] = 0 # for off-island
 ```
 
 
@@ -150,7 +150,7 @@ Y[199] = 0 # for off-island
 # We use this quantity to set the emergence rate of mosquitoes in each of the patches
 # this is Lambda, calculated based on equilibrium value for the emergence process
 Lambda = M*(1-p)/p
-Lambda[199] = 0 # for off-island
+Lambda[242] = 0 # for off-island
 ```
 
 
@@ -162,9 +162,8 @@ Should probably make a map of where everything is:
 # areas_inh <- rgdal::readOGR("/Users/dtcitron/Documents/MASH/MASH-Main/MASH-dev/DanielCitron/Bioko_Island_Cluster_Simulations/BI_maps/areas_inh", "areas_inh")
 # areasf <- fortify(areas_inh, region = "areaId")
 
-h.data = data.table(areaId = areaId.list, h = h.FOI[1:198])
-h.data[areaId == 3500]$areaId <- 3559
-area.data = merge(areasf, h.data,by.x = "id", by.y = "areaId", all = FALSE)
+h.data = data.table(areaId = areaId.list, h = h.FOI[1:241])
+area.data = merge(areasf, h.data, by.x = "id", by.y = "areaId", all = FALSE)
 #area.data = merge(areasf, dt, by.x = "id", by.y = "areaId", all=FALSE)
 plot.data <- area.data[order(area.data$order), ]
 p1 = ggplot(data = plot.data, aes(x=long, y=lat, group = group))
@@ -191,10 +190,10 @@ There are 199 patches in the Bioko Island model.  198 of them are the populated 
 
 ```{r Set up Patch Parameters}
 # set up patches (n is how many patches we have)
-n.patch <- 199 # 194 + 1 : the last patch is off-island
+n.patch <- 242 # 241 + 1 : the last patch is off-island
 
 # set the EIR off-island
-eg.eir <- h.FOI[199]/b
+eg.eir <- h.FOI[242]/b
 
 patch_pars <- patches_parameters(move = movement.matrix,
                                  bWeightZoo = rep(0,n.patch),
@@ -247,9 +246,9 @@ patch_id <- rep(0:(n.patch-1), times=patch.human.pop)
 bweights <- rep(1,n.humans)
 
 # Set mean trip durations based on destination
-trip.durations <- c(rep(trip.duration.bi, 198), trip.duration.eg)
+trip.durations <- c(rep(trip.duration.bi, 241), trip.duration.eg)
 # Set trip frequencies - this is set according to one's home origin patch
-trip.freqs <- rep(trip.freq.data[year == 2018]$draw.mean/56, times = patch.human.pop[1:198])
+trip.freqs <- rep(trip.freq.data[year == 2018]$draw.mean/56, times = patch.human.pop[1:241])
 
 
 # the data structure that will be passed down to C++ to construct the human pop
@@ -316,21 +315,19 @@ run_macro(tmax = 100,
           patch_pars = patch_pars,
           model_pars = pfsi_pars,
           log_streams = log_pars,
-          vaxx_events = vaxx_pars,
+          vaxx_events = NULL,# vaxx_pars,
           verbose = T)
 ```
 
 ```{r Handling a single set of outputs}
 dt <- fread(h_inf)
 
+areaId.list <- sort(pop.data[year == 2018]$areaId)
+pop.dt <- data.table(patch = c(0:(241-1)), areaId = areaId.list)
+pop.dt <- merge(pop.dt, pop.data[year == 2018, .(areaId, pop)], by = "areaId")
+
 # Where are the patch indexes for a handful of patches?
-which(areaId.list == 220) # in Malabo
-which(areaId.list == 335) # in Malabo
-which(areaId.list == 502) # Basupu
-which(areaId.list == 1175) # in Baney
-which(areaId.list == 2199) # in Luba
-which(areaId.list == 2457) # in Riaba
-patch.human.pop[c(9, 31, 67, 121, 171, 175)]
+
 
 # Create a new data table to merge onto the simulation output, to track population denominators over time
 pop.dt <- data.table(patch = c(0:(198-1)), areaId = areaId.list)
@@ -343,7 +340,7 @@ dt[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "patch" , "ti
 
 #View(dt[patch %in% (c(9, 31, 67, 121, 171, 175) - 1)])
 
-h <- melt(dt[patch %in% (c(9, 31, 67, 121, 171, 175) - 1)],
+h <- melt(dt[areaId %in% c(152, 207, 220, 335, 502, 644, 1175, 2199, 2457)],
      id.vars = c("time", "areaId"), 
      measure.vars = c("s","i","p"),
      value.name = "fraction")
@@ -450,27 +447,29 @@ mat_mean <- cbind(df_curr[,1:2], as.data.table(mat_mean))
 mat_sd <- cbind(df_curr[,1:2], as.data.table(mat_sd))
 
 # Create a new data table to merge onto the simulation output, to track population denominators over time
-pop.dt <- data.table(patch = c(0:(198-1)), areaId = areaId.list)
+pop.dt <- data.table(patch = c(0:(241-1)), areaId = areaId.list)
 pop.dt <- merge(pop.dt, pop.data[year == 2018, .(areaId, pop)], by = "areaId")
 # merge, to use the pop column as a denominator when calculating fractions susceptible, infected, protected
-mat_mean <- merge(mat_mean, holder, by = "patch")
-mat_mean[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "patch" , "time")]
-mat_mean[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "patch" , "time")]
-mat_mean[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "patch" , "time")]
+mat_mean <- merge(mat_mean, pop.dt, by = "patch")
+mat_mean[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "areaId" , "time")]
+mat_mean[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "areaId" , "time")]
+mat_mean[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "areaId" , "time")]
 # do the same thing with the standard deviations
-mat_sd <- merge(mat_sd, holder, by = "patch")
-mat_sd[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "patch" , "time")]
-mat_sd[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "patch" , "time")]
-mat_sd[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "patch" , "time")]
+mat_sd <- merge(mat_sd, pop.dt, by = "patch")
+mat_sd[, s := (S_resident_home + S_resident_away)/pop, by = c("time" , "areaId" , "time")]
+mat_sd[, i := (I_resident_home + I_resident_away)/pop, by = c("time" , "areaId" , "time")]
+mat_sd[, p := (P_resident_home + P_resident_away)/pop, by = c("time" , "areaId" , "time")]
 
 #View(mat_mean[areaId %in% c(220,335,502,1175,2199,2457)])
+```
 
-h <- melt(mat_mean[areaId %in% c(220,335,502,1175,2199,2457)],
+```{r}
+h <- melt(mat_mean[areaId %in% c(152, 207, 220, 335, 502, 644, 1175, 2199, 2457)],
      id.vars = c("time", "areaId"), 
      measure.vars = c("s","i","p"),
      value.name = "fraction")
 
-h.sd <- melt(mat_sd[areaId %in% c(220,335,502,1175,2199,2457)],
+h.sd <- melt(mat_sd[areaId %in% c(152, 207, 220, 335, 502, 644, 1175, 2199, 2457)],
      id.vars = c("time", "areaId"), 
      measure.vars = c("s","i","p"),
      value.name = "fraction.sd")
@@ -481,6 +480,7 @@ ggplot(data = h) +
   geom_point(mapping = aes(x = time, y = fraction, color = variable), shape = 20, size = .01) + 
   facet_wrap(~areaId)
 ```
+
 
 Try again, and double-check that the variances across the 3 different quantities should be different:
 ```{r}

@@ -159,10 +159,12 @@ travel.data.2018[is.na(travel.data.2018)] <- 0
 
 # Add 2018 populations
 pop.by.area <- fread(here("data/clean/pop_areas2018.csv"))
-travel.data.2018 <- merge(travel.data.2018, pop.by.area[,.(areaId, pop)], by = "areaId", all= FALSE)
+# need to be careful to include all inhabited pixels
+travel.data.2018 <-  merge(travel.data.2018, pop.by.area[!is.na(pop) & pop > 0,.(areaId, pop)], by = "areaId", all= TRUE)
+travel.data.2018 <- travel.data.2018[, lapply(.SD, function(x){ifelse(is.na(x), 0, x)})]
 travel.data.2018[areaId == 704]$pop <- 5 # for some reason the population here is zeroed out in the census
-
 travel.data.2018$year <- 2018
+
 # Note that for 2018 there is a weird discrepancy between trip.counts and the sum over 
 # the individual reported trips to all destinations.  This is because the trip.counts
 # counts people who left home to travel on-island + off-island as a single trip
@@ -170,12 +172,12 @@ travel.data.2018$year <- 2018
 # We can alternatively replace trip.counts with the sum total of detailed trip counts.
 
 travel.data.2018 <- merge(travel.data.2018, travel.data.2015.2017[,.(areaId, ad2)], by = "areaId", all.x = TRUE, all.y = FALSE)
-travel.data.2018[areaId %in% c(341, 469)]$ad2 <- "Baney"
-pixels.peri.2018 <- c(327, 328, 389, 446, 568, 570, 572, 795, 909, 968, 1261)
+travel.data.2018[areaId %in% c(341, 400, 410, 456, 469)]$ad2 <- "Baney"
+pixels.peri.2018 <- c(327, 328, 385, 388, 389, 446, 567, 568, 570, 572, 519, 619, 626, 627, 687, 795, 909, 968, 1261)
 travel.data.2018[areaId %in% pixels.peri.2018]$ad2 <- "Peri"
-pixels.luba <- c(2084, 2085, 2200, 2204, 2307, 2377)
+pixels.luba <- c(1732, 2027, 2084, 2085, 2131, 2135, 2200, 2204, 2307, 2377, 2497)
 travel.data.2018[areaId %in% pixels.luba]$ad2 <- "Luba"
-pixels.riaba <- c(2753, 2286, 2043, 2403, 2394, 2393, 2337, 2335)
+pixels.riaba <- c(2043, 2110, 2227, 2286, 2335, 2337, 2338, 2341, 2393, 2394, 2397, 2403, 2404, 2753)
 travel.data.2018[areaId %in% pixels.riaba]$ad2 <- "Riaba"
 travel.data.2018[areaId == 3500]$ad2 <- "Ureka"
 
@@ -183,6 +185,15 @@ travel.data.2018[areaId == 3500]$ad2 <- "Ureka"
 colnames(travel.data.2018) <- c("areaId", "n", "trip.counts", "t_eg", "ti_ban", "ti_lub", "ti_mal", "ti_ria", "ti_ure", "ti_mok", "pop", "year", "ad2")
 setcolorder(travel.data.2018, c("areaId", "ad2", "n", "trip.counts", "t_eg", "ti_ban", "ti_lub", "ti_mal", "ti_mok", "ti_ria", "ti_ure", "pop", "year"))
 
+# Plotting, showing where each pixel falls on the map 
+# areas_inh <- raster::shapefile(here("data/raw/mapArea_centroids/mapareagrid_centroids.shp")) #
+# areas_inh <- areas_inh[areas_inh$OBJECTID %in% travel.data.2018$areaId,]
+# h <- data.frame(areas_inh)
+# h2 <- travel.data.2018[, .(OBJECTID = areaId, ad2)]
+# h <- merge(h, h2, by = "OBJECTID" , all = TRUE)
+# #h[h$OBJECTID == 2497,]$ad2 <- "hippo"
+# ggplot() +
+#   geom_point(data = h, mapping = aes(x = coords.x1, y = coords.x2, color = ad2))
 
 # Concatenate these data sets:
 aggregated.travel.data <- rbind(travel.data.2015, travel.data.2016, travel.data.2017, travel.data.2018)

@@ -15,7 +15,7 @@ library(data.table)
 
 # Fit data for trips to EG ####
 
-# Load the
+# Load the data from EG
 eg.dat <- fread("data/raw/2018_travel_data/trips_to_EG.csv")
 eg.dat <- eg.dat[!is.na(nights)]
 
@@ -38,6 +38,7 @@ plot(h$breaks[1:54] + 3.5, h$density, col = "blue")
 points(x,y, add =TRUE, axes = FALSE)
 
 
+  
 
 # Fit data for the other destinations on the island ####
 bi.dat <- fread("data/raw/2018_travel_data/trips_on_BI.csv")

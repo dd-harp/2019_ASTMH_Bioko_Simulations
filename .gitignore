@@ -1,0 +1,6 @@
+*~
+report_outputs
+.Rhistory
+*.Rproj
+.Rproj.user
+scripts/BI_data_cleaning.R

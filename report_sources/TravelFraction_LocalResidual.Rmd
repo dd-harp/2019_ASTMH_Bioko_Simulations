@@ -112,6 +112,32 @@ map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group,
 map
 ```
 
+New simulations, after changing the off-island transmission:
+```{r}
+new.sim <- fread(here("data/simulation_outputs/TF_LR_Sim_Results/travelfrac_output.csv"))
+
+tf.lr <- merge(tf.lr, new.sim[,.(areaId, ad2, tf,tf.low, tf.high)], by = "areaId")
+
+area.data = merge(areasf, tf.lr, by.x = "id", by.y = "areaId", all=TRUE)
+plot.data<-area.data[order(area.data$order), ]
+p1 = ggplot(data = plot.data, aes(x=long, y=lat, group = group))
+p2 = p1 + geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill="grey", size = 0.25)
+
+```
+
+```{r}
+map <- p2 + geom_polygon(data = plot.data, aes(x = long, y = lat, group = group, fill = tf.low), color = NA, size = 0.25) +
+  scale_fill_gradient(name="TF, SU", low="yellow", high="red", limits=c(0,.5)) +
+  #scale_fill_viridis(name="Travel Fraction", limits=c(0, 1), option="cividis") + 
+  geom_polygon(data = bioko, aes(x = long, y = lat, group = group), color = "black", fill=NA, size = 0.25) +
+  theme(axis.line=element_blank(),axis.text.x=element_blank(), axis.text.y=element_blank(),axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(), panel.background=element_blank(), legend.position=c(0.2, 0.8)) + 
+  coord_equal()
+map
+```
+
+
 # Travel Fraction Uncertainty
 ```{r Data processing}
 summary(tf.lr$sd.tf)

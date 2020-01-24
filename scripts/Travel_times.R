@@ -22,25 +22,27 @@ centroids <- as.data.table(centroids)
 # travel data information; includes areaId and ad2 for 2015-2018
 travel.data <- fread(here("data/clean/aggregated_2015_2018_travel_data.csv"))
 # merge them together
-centroids <- merge(travel.data[,.(areaId, ad2)], centroids, by.x = "areaId", by.y = "FID", all = FALSE)
+# needed to fix this, because otherwise we leave out 2514 ...
+centroids <- merge(travel.data[year == 2018 | (year == 2015 & areaId == 2514),.(areaId, ad2)], centroids, by.x = "areaId", by.y = "OBJECTID", all = FALSE)
+
 
 # Fill out matrix of travel distances (not times)
 areaId.list <- centroids$areaId
-# trip.distances <- matrix(0, nrow = length(areaId.list), ncol = (length(areaId.list)+1))
-# trip.distances[, 1] <- areaId.list
-# # loop over rows
-# for(i in 1:length(areaId.list)){
-#   # loop over columns
-#   for(j in 1:(length(areaId.list))){
-#     x1 = centroids[areaId == areaId.list[[i]]]$coords.x1
-#     y1 = centroids[areaId == areaId.list[[i]]]$coords.x2
-#     x2 = centroids[areaId == areaId.list[[j]]]$coords.x1
-#     y2 = centroids[areaId == areaId.list[[j]]]$coords.x2
-#     d = sqrt((x1 - x2)^2 + (y1 - y2)^2)
-#     trip.distances[i,j+1] <- d
-#   }
-# }
-# 
+trip.distances <- matrix(0, nrow = length(areaId.list), ncol = (length(areaId.list)+1))
+trip.distances[, 1] <- areaId.list
+# loop over rows
+for(i in 1:length(areaId.list)){
+  # loop over columns
+  for(j in 1:(length(areaId.list))){
+    x1 = centroids[areaId == areaId.list[[i]]]$coords.x1
+    y1 = centroids[areaId == areaId.list[[i]]]$coords.x2
+    x2 = centroids[areaId == areaId.list[[j]]]$coords.x1
+    y2 = centroids[areaId == areaId.list[[j]]]$coords.x2
+    d = sqrt((x1 - x2)^2 + (y1 - y2)^2)
+    trip.distances[i,j+1] <- d
+  }
+}
+
 colnames(trip.distances) <- c("areaId", as.character(areaId.list))
 
 # goal is to write down travel distance to each region:
@@ -52,7 +54,7 @@ mal.ixs <- sapply(mal.areaIds, function(y) which(y == areaId.list))
 lub.areaIds <- travel.data[ad2 == "Luba"]$areaId
 lub.ixs <- sapply(lub.areaIds, function(y) which(y == areaId.list))
 ria.areaIds <- travel.data[ad2 == "Riaba"]$areaId
-ria.ixs <- sapply(ria.areaIds, function(y) which(y == areaId.list))
+ria.ixs <- unlist(sapply(ria.areaIds, function(y) which(y == areaId.list)))
 ure.areaIds <- travel.data[ad2 == "Ureka"]$areaId
 ure.ixs <- sapply(ure.areaIds, function(y) which(y == areaId.list))
 mok.areaIds <- travel.data[ad2 == "Moka"]$areaId
