@@ -32,3 +32,6 @@ Full contents:
     * bioko_island_workflow_vax.Rmd - similar workflow document, this time with vaccinations
     * TravelFraction_LocalResidual.Rmd - plotting Travel Fraction and Local Residual fraction
     * pfpr_uncertainties.Rmd - Explore pfpr data: are there obvious correlations between PfPR's uncertainty and things like sample size or underlying Aggregate_travel_population_data
+  * simulation_scripts - scripts used to create simulations on the IHME cluster, Fall 2019
+    * *_job.R scripts run single simulation runs
+    * *_output_handling.Rmd scripts convert the outputs into parsable files for plotting
